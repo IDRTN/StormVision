@@ -1,11 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback, Component } from 'react';
 import {
   View, Text, StyleSheet, SafeAreaView, TouchableOpacity, ScrollView,
-  Platform, Switch, Modal
+  Platform, Switch
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { Magnetometer, Accelerometer } from 'expo-sensors';
-import { Audio } from 'expo-av';
 
 // ===== Error Boundary =====
 class ErrorBoundary extends Component<{children:React.ReactNode},{hasError:boolean;error:string}> {
@@ -20,7 +18,7 @@ class ErrorBoundary extends Component<{children:React.ReactNode},{hasError:boole
     if (this.state.hasError) {
       return (
         <SafeAreaView style={{flex:1,backgroundColor:'#0a0a0a',justifyContent:'center',alignItems:'center',padding:20}}>
-          <Text style={{color:'#ff4444',fontSize:18,fontWeight:'bold',marginBottom:12}}>⚠️ StormVision Error</Text>
+          <Text style={{color:'#ff4444',fontSize:18,fontWeight:'bold',marginBottom:12}}>⚠️ StormVision</Text>
           <Text style={{color:'#888',fontSize:13,textAlign:'center'}}>{this.state.error}</Text>
           <TouchableOpacity
             style={{marginTop:20,backgroundColor:'#1a3a4a',paddingHorizontal:24,paddingVertical:10,borderRadius:8}}
@@ -88,6 +86,17 @@ class MockFrameGen {
   }
 }
 
+// ===== Lazy Native Module Loader =====
+type LazyModule<T> = { loaded: boolean; module: T | null; error: string | null };
+function lazyLoad<T>(moduleName: string): LazyModule<T> {
+  try {
+    const mod = require(moduleName);
+    return { loaded: true, module: mod as T, error: null };
+  } catch (e: any) {
+    return { loaded: false, module: null, error: e?.message || String(e) };
+  }
+}
+
 // ===== Main App =====
 function StormVisionApp() {
   // Camera
@@ -102,14 +111,14 @@ function StormVisionApp() {
   const [motion, setMotion] = useState<Motion>({magnitude:0,direction:0});
   const [showMask, setShowMask] = useState(true);
 
-  // Sensors
+  // Sensors (lazy loaded)
   const [compassHeading, setCompassHeading] = useState(0);
   const [hasCompass, setHasCompass] = useState(false);
 
-  // Audio
+  // Audio (lazy loaded)
   const [isRecording, setIsRecording] = useState(false);
-  const [audioPermission, setAudioPermission] = useState(false);
-  const recordingRef = useRef<Audio.Recording|null>(null);
+  const [audioAvailable, setAudioAvailable] = useState(false);
+  const recordingRef = useRef<any>(null);
 
   // 360
   const [insta360Active, setInsta360Active] = useState(false);
@@ -127,33 +136,57 @@ function StormVisionApp() {
   const frameHistoryRef = useRef<{frame:number;clouds:number;cover:number;score:number;type:string}[]>([]);
   const [history, setHistory] = useState<typeof frameHistoryRef.current>([]);
 
+  // Sensor module refs (lazy loaded once on mount)
+  const sensorsRef = useRef<LazyModule<any>>({loaded:false,module:null,error:null});
+  const audioRef = useRef<LazyModule<any>>({loaded:false,module:null,error:null});
+
   // ===== Init =====
   useEffect(() => {
-    (async()=>{
-      try {
-        const audPerm = await Audio.requestPermissionsAsync();
-        setAudioPermission(audPerm.granted);
-        await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
-      } catch(e) { console.log('Audio setup error:', e); }
+    // Lazy load sensors
+    sensorsRef.current = lazyLoad('expo-sensors');
+    if (sensorsRef.current.loaded) {
+      const { Magnetometer, Accelerometer } = sensorsRef.current.module;
+      (async () => {
+        try {
+          const [hasAccel, hasMag] = await Promise.all([
+            Accelerometer.isAvailableAsync(),
+            Magnetometer.isAvailableAsync()
+          ]);
+          setHasCompass(hasAccel && hasMag);
+        } catch (e) {
+          console.log('Compass check error:', e);
+        }
+      })();
+    }
 
-      try {
-        const [hasAccel, hasMag] = await Promise.all([
-          Accelerometer.isAvailableAsync(),
-          Magnetometer.isAvailableAsync()
-        ]);
-        setHasCompass(hasAccel && hasMag);
-      } catch(e) { console.log('Sensor check error:', e); }
-    })();
+    // Lazy load audio
+    const audioMod = lazyLoad<{Audio: any}>('expo-av');
+    audioRef.current = audioMod;
+    if (audioMod.loaded && audioMod.module) {
+      const { Audio } = audioMod.module;
+      (async () => {
+        try {
+          const audPerm = await Audio.requestPermissionsAsync();
+          if (audPerm.granted) {
+            await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+            setAudioAvailable(true);
+          }
+        } catch (e) {
+          console.log('Audio setup error:', e);
+        }
+      })();
+    }
   }, []);
 
   // ===== Compass =====
   useEffect(() => {
-    if (!hasCompass) return;
+    if (!hasCompass || !sensorsRef.current.loaded) return;
+    const { Magnetometer, Accelerometer } = sensorsRef.current.module;
     const accelData = { x:0, y:0, z:0 };
     const magData = { x:0, y:0, z:0 };
 
-    const subAccel = Accelerometer.addListener(d => { accelData.x = d.x; accelData.y = d.y; accelData.z = d.z; });
-    const subMag = Magnetometer.addListener(d => { magData.x = d.x; magData.y = d.y; magData.z = d.z; });
+    const subAccel = Accelerometer.addListener((d:any) => { accelData.x = d.x; accelData.y = d.y; accelData.z = d.z; });
+    const subMag = Magnetometer.addListener((d:any) => { magData.x = d.x; magData.y = d.y; magData.z = d.z; });
 
     const interval = setInterval(() => {
       const a = accelData, m = magData;
@@ -205,7 +238,6 @@ function StormVisionApp() {
           frameHistoryRef.current = [entry, ...frameHistoryRef.current].slice(0, 50);
           setHistory([...frameHistoryRef.current]);
         }
-        // Auto-rotate 360
         if (insta360Active) {
           insta360Yaw.current += 0.005;
         }
@@ -222,8 +254,9 @@ function StormVisionApp() {
 
   // ===== Audio Recording =====
   async function toggleRecording() {
-    if (!audioPermission) return;
+    if (!audioAvailable || !audioRef.current.loaded || !audioRef.current.module) return;
     try {
+      const { Audio } = audioRef.current.module;
       if (isRecording) {
         await recordingRef.current?.stopAndUnloadAsync();
         recordingRef.current = null;
@@ -250,41 +283,34 @@ function StormVisionApp() {
   // ===== Render =====
   return (
     <SafeAreaView style={s.c}>
-      {/* Spacer for bottom nav */}
       <View style={{position:'absolute',bottom:0,left:0,right:0,height:20,backgroundColor:'#111',zIndex:200}} />
-
-      {/* Header */}
       <View style={s.h}>
         <View style={{flexDirection:'row',justifyContent:'space-between',alignItems:'center'}}>
           <Text style={s.t}>⛈ StormVision</Text>
-          <Text style={s.hs}>{insta360Connected ? '360° ON' : hasCompass ? 'Sensors OK' : 'Running...'}</Text>
+          <Text style={s.hs}>AI Cloud Tracker</Text>
         </View>
       </View>
 
+      {/* Camera Tab */}
       {tab === 'camera' && (
         <View style={s.cc}>
+          {/* Camera Preview */}
           <View style={s.camBox}>
             {!useMock && hasCameraPermission ? (
               <CameraView facing="back" style={{width:300,height:200}} />
             ) : (
               <>
-                <Text style={s.cp}>☁️ Sky Camera</Text>
+                <Text style={s.cp}>☁️ Sky View</Text>
                 <Text style={s.fi}>Frame {frameCount}</Text>
               </>
             )}
-
             {storm?.alertMessage && (
               <View style={[s.alertBox, {backgroundColor: storm.stormScore>=0.7 ? '#8B0000' : '#CC5500'}]}>
                 <Text style={s.alertTitle}>⚠️ {storm.alertMessage}</Text>
               </View>
             )}
 
-            {isRecording && (
-              <View style={{position:'absolute',top:4,alignSelf:'center',backgroundColor:'rgba(255,0,0,0.8)',paddingHorizontal:12,paddingVertical:2,borderRadius:10}}>
-                <Text style={{color:'#fff',fontSize:10,fontWeight:'bold'}}>🔴 REC</Text>
-              </View>
-            )}
-
+            {/* 360 PiP */}
             {insta360Active && !insta360Expanded && (
               <TouchableOpacity
                 style={s.pipOverlay}
@@ -301,6 +327,7 @@ function StormVisionApp() {
               </TouchableOpacity>
             )}
 
+            {/* Compass */}
             {hasCompass && (
               <View style={s.compassWrap}>
                 <View style={s.compassRing}>
@@ -323,7 +350,7 @@ function StormVisionApp() {
               <Text>Motion</Text><Text style={{color:'#fff'}}>{motion.magnitude>0.5?motion.magnitude.toFixed(1)+'px':'--'}</Text>
             </View>
             <View style={s.pr}><Text>Wind</Text><Text style={{color:'#fff'}}>{windDir}</Text></View>
-            <View style={s.pr}><Text>Heading</Text><Text style={{color:'#fff'}}>{Math.round(compassHeading)}°</Text></View>
+            <View style={s.pr}><Text>Heading</Text><Text style={{color:'#fff'}}>{hasCompass?Math.round(compassHeading)+'°':'--'}</Text></View>
           </View>
 
           {/* Controls */}
@@ -386,31 +413,76 @@ function StormVisionApp() {
             <Text style={s.slbl}>Cloud Mask</Text>
             <Switch value={showMask} onValueChange={setShowMask} trackColor={{false:'#333',true:'#1a6b4a'}} thumbColor={showMask?'#50C8FF':'#666'}/>
           </View>
-          <Text style={s.sst2}>About</Text>
+          {!audioAvailable && (
+            <View style={[s.sr,{backgroundColor:'#1a1a1a'}]}>
+              <Text style={s.slbl}>🎤 Audio</Text>
+              <Text style={{color:'#666',fontSize:12}}>Unavailable</Text>
+            </View>
+          )}
+          <View style={{marginTop:16}}>
+            <Text style={[s.sst,{marginBottom:8}]}>360° Camera</Text>
+            <Text style={{color:'#888',fontSize:12,lineHeight:18,marginBottom:8}}>
+              Connect your Insta360 camera to the phone's WiFi network for a live 360° feed.
+              The PiP overlay will appear on the camera view.
+            </Text>
+            <Text style={{color:'#666',fontSize:11}}>
+              Insta360 connection uses WiFi Direct. Make sure your camera is powered on and
+              connected to the same network as this device.
+            </Text>
+          </View>
           <View style={s.ab}>
-            <Text style={s.abt}>StormVision v1.0.0</Text>
-            <Text style={s.abtxt}>AI-powered storm cloud tracking for mobile. Works with phone camera and Insta360 360° cameras. Live compass, barometric pressure, audio recording, and cloud detection.</Text>
+            <Text style={s.abt}>⛈ StormVision</Text>
+            <Text style={s.abtxt}>AI-powered storm cloud tracking for mobile{'\n'}v1.0.0</Text>
           </View>
         </ScrollView>
       )}
 
-      {/* 360 Modal */}
-      <Modal visible={insta360Expanded} transparent animationType="fade" onRequestClose={()=>setInsta360Expanded(false)}>
-        <View style={{flex:1,backgroundColor:'#000',justifyContent:'center',alignItems:'center'}}>
-          <Text style={{color:'#50C8FF',fontSize:16,marginBottom:20}}>🌐 360° Camera View</Text>
-          <View style={{width:280,height:280,borderRadius:140,borderWidth:2,borderColor:'rgba(80,200,255,0.3)',justifyContent:'center',alignItems:'center'}}>
-            <Text style={{color:'#888',fontSize:12}}>Drag to look around</Text>
-            <Text style={{color:'rgba(80,200,255,0.4)',fontSize:10,marginTop:4}}>Pinch to zoom</Text>
+      {/* 360° Expanded Modal */}
+      {insta360Expanded && (
+        <View style={s.modalOverlay}>
+          <View style={s.modalContent}>
+            <Text style={{color:'#50C8FF',fontSize:16,fontWeight:'bold',marginBottom:8}}>🌐 360° View</Text>
+            <View style={{
+              width:'100%',height:200,borderRadius:12,backgroundColor:'#1a1a2e',
+              justifyContent:'center',alignItems:'center',overflow:'hidden',
+              borderWidth:1,borderColor:'#333'
+            }}>
+              <Text style={{color:'rgba(80,200,255,0.6)',fontSize:14}}>360° Preview</Text>
+              <Text style={{color:'rgba(255,255,255,0.3)',fontSize:11,marginTop:8}}>
+                Yaw: {(insta360Yaw.current * 180 / Math.PI).toFixed(0)}°
+              </Text>
+              <Text style={{color:'rgba(80,200,255,0.3)',fontSize:10,marginTop:4}}>
+                {insta360Connected ? 'Connected' : 'Connecting...'}
+              </Text>
+            </View>
+            <View style={{flexDirection:'row',marginTop:12,gap:8,justifyContent:'center'}}>
+              <TouchableOpacity style={[s.tb,{width:80}]} onPress={()=>{insta360Yaw.current -= 0.1}}>
+                <Text style={{color:'#fff',fontSize:12}}>← Left</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[s.tb,{width:80}]} onPress={()=>{insta360Yaw.current += 0.1}}>
+                <Text style={{color:'#fff',fontSize:12}}>Right →</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={{flexDirection:'row',marginTop:8,gap:8,justifyContent:'center'}}>
+              <TouchableOpacity style={[s.tb,{width:80}]} onPress={()=>{insta360Pitch.current -= 0.1}}>
+                <Text style={{color:'#fff',fontSize:12}}>↑ Up</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[s.tb,{width:80}]} onPress={()=>{insta360Pitch.current += 0.1}}>
+                <Text style={{color:'#fff',fontSize:12}}>Down ↓</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={{color:'#888',fontSize:10,marginTop:12}}>
+              Connect to Insta360 WiFi for live feed
+            </Text>
+            <TouchableOpacity
+              style={{position:'absolute',top:16,right:16,width:36,height:36,borderRadius:18,backgroundColor:'rgba(255,255,255,0.1)',justifyContent:'center',alignItems:'center'}}
+              onPress={()=>setInsta360Expanded(false)}
+            >
+              <Text style={{color:'#fff',fontSize:18}}>✕</Text>
+            </TouchableOpacity>
           </View>
-          <Text style={{color:'#888',fontSize:10,marginTop:8}}>Connect to Insta360 WiFi for live feed</Text>
-          <TouchableOpacity
-            style={{position:'absolute',top:40,right:20,width:36,height:36,borderRadius:18,backgroundColor:'rgba(255,255,255,0.1)',justifyContent:'center',alignItems:'center'}}
-            onPress={()=>setInsta360Expanded(false)}
-          >
-            <Text style={{color:'#fff',fontSize:18}}>✕</Text>
-          </TouchableOpacity>
         </View>
-      </Modal>
+      )}
 
       {/* Tab Bar */}
       <View style={[s.tabBar]}>
@@ -460,7 +532,6 @@ const s = StyleSheet.create({
   ta:{backgroundColor:'#1a3a4a',borderWidth:1,borderColor:'#50C8FF'},
   sl:{flex:1,padding:16},
   sst:{color:'#50C8FF',fontSize:14,fontWeight:'bold',marginBottom:12,letterSpacing:1},
-  sst2:{color:'#50C8FF',fontSize:12,fontWeight:'600',letterSpacing:1,marginTop:16,marginBottom:8,textTransform:'uppercase'},
   em:{color:'#666',fontSize:13,textAlign:'center',paddingTop:40},
   hi:{flexDirection:'row',alignItems:'center',backgroundColor:'#1a1a1a',borderRadius:10,padding:12,marginBottom:6},
   sd:{width:12,height:12,borderRadius:6,marginRight:10},
@@ -481,4 +552,6 @@ const s = StyleSheet.create({
   compassN:{position:'absolute',top:2,alignSelf:'center',fontSize:6,color:'#50C8FF',fontWeight:'bold'},
   compassNeedle:{position:'absolute',top:3,width:2,height:18,backgroundColor:'#FF4444',borderRadius:1,transformOrigin:'50% 90%'},
   compassLabel:{position:'absolute',bottom:-12,alignSelf:'center',fontSize:8,color:'#888'},
+  modalOverlay:{position:'absolute',top:0,left:0,right:0,bottom:0,backgroundColor:'rgba(0,0,0,0.85)',zIndex:100,justifyContent:'center',alignItems:'center'},
+  modalContent:{width:'85%',backgroundColor:'#1a1a1a',borderRadius:16,padding:20,alignItems:'center'},
 });
