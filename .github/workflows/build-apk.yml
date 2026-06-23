@@ -1,0 +1,73 @@
+name: Build Expo APK
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:  # manual trigger
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Build Release APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+        env:
+          ANDROID_HOME: ${{ github.workspace }}/android-sdk
+
+      - name: Locate APK
+        id: apk
+        run: |
+          APK=$(find android -name "*.apk" -path "*/release/*" ! -name "*unsigned*" ! -name "*unaligned*" | head -1)
+          if [ -z "$APK" ]; then
+            APK=$(find android -name "*.apk" -path "*/release/*" | head -1)
+          fi
+          echo "apk_path=$APK" >> "$GITHUB_OUTPUT"
+          echo "APK found: $APK"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: StormVision-APK
+          path: ${{ steps.apk.outputs.apk_path }}
+          if-no-files-found: error
+
+      - name: Upload APK (alternative debug)
+        if: steps.apk.outputs.apk_path == ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: StormVision-APK-fallback
+          path: android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: warn

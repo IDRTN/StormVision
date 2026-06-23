@@ -1,0 +1,34 @@
+{
+  "expo": {
+    "name": "StormVision",
+    "slug": "stormvision",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": { "backgroundColor": "#000000" },
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": { "NSCameraUsageDescription": "StormVision needs camera access to track storm clouds." }
+    },
+    "android": {
+      "package": "com.stormvision.app",
+      "adaptiveIcon": {
+        "backgroundColor": "#000000",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_WIFI_STATE",
+        "android.permission.ACCESS_NETWORK_STATE"
+      ]
+    },
+    "web": { "favicon": "./assets/favicon.png" },
+    "plugins": [
+      ["expo-camera", { "cameraPermission": "StormVision needs camera access to track storm clouds." }]
+    ]
+  }
+}

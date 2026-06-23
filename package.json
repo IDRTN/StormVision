@@ -1,0 +1,36 @@
+{
+  "name": "stormvisionmobile",
+  "version": "1.0.0",
+  "main": "App.tsx",
+  "dependencies": {
+    "@expo/metro-runtime": "~56.0.15",
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "expo": "~56.0.12",
+    "expo-av": "^16.0.8",
+    "expo-camera": "~56.0.8",
+    "expo-constants": "~56.0.18",
+    "expo-device": "^56.0.4",
+    "expo-file-system": "~56.0.8",
+    "expo-gl": "~56.0.5",
+    "expo-image-manipulator": "~56.0.19",
+    "expo-linking": "~56.0.14",
+    "expo-sensors": "^56.0.6",
+    "expo-status-bar": "~56.0.4",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-native": "0.85.3",
+    "react-native-svg": "15.15.4",
+    "react-native-web": "^0.21.2"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.2",
+    "typescript": "~6.0.3"
+  },
+  "scripts": {
+    "android": "expo run:android",
+    "start": "expo start",
+    "web": "expo start --web",
+    "build:apk": "cd android && ./gradlew assembleRelease"
+  },
+  "private": true
+}
